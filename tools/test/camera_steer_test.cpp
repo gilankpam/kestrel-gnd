@@ -30,6 +30,8 @@ struct Sim {
     double air_lag = 350000;          // a trim reaches the sensor this much later
     double start_phase = 7000;        // where the first capture falls in the refresh
     double margin = 1000;             // ready this long before the deadline (DISPLAY > Sync Margin)
+    bool trace = false;               // each window's figures
+    double backlog = 0;               // link-up: the first second's pictures this much later, us, falling to none
     // results, from `from_us` on
     int shown = 0, frames = 0, overtaken = 0;
     double trim_min = 1e9, trim_max = -1e9;
@@ -59,12 +61,17 @@ static void run(Sim &s, double seconds, double from_s, double step_at_s = -1, do
         cap += s.Pc0 + lines * s.line;
         double lat = s.lat0 + s.jitter * std::fabs(rng.n()) + (i % 17 == 0 ? s.gop_late : 0);
         if (step_at_s >= 0 && cap >= step_at_s * 1e6) lat += step_us;
+        if (cap < 1e6) lat += s.backlog * (1 - cap / 1e6);
         const double ready = cap + lat;
         // the vblank grid: vblank k at k * Pm; the vblank before `ready`
         const long kb = (long)std::floor(ready / s.Pm);
         const uint64_t vb = (uint64_t)(kb * s.Pm);
         cs.on_frame((uint64_t)cap, (uint64_t)ready, vb, s.Pm, 1, 1e6 / s.Pc0);
-        if (cs.tick((uint64_t)ready) && np < 64) pend[np++] = { ready + s.air_lag, cs.trim_us() };
+        const bool ch = cs.tick((uint64_t)ready);
+        if (ch && np < 64) pend[np++] = { ready + s.air_lag, cs.trim_us() };
+        if (s.trace && ch)
+            std::printf("  %5.1f s %d err %+6.0f trim %5.1f centre %5.1f neutral %5.1f allow %5.1f ms\n", cap / 1e6,
+                        (int)cs.state(), cs.error_us(), cs.trim_us(), cs.centre_us(), cs.neutral_us(), cs.allowance_us() / 1000);
         // shown at the first vblank it makes the deadline for
         const long kshow = ready <= (kb + 1) * s.Pm - s.cutoff ? kb + 1 : kb + 2;
         if ((uint64_t)cap >= from) {
@@ -119,6 +126,22 @@ int main() {
         run(s, 120, 30);
         std::printf("4 ms margin: locked at %.1f s, %d of %d overtaken\n", s.locked_at / 1e6, s.overtaken, s.frames);
         CHECK(s.locked_at > 0 && s.locked_at < 20000000);
+        CHECK(s.overtaken <= 1);
+    }
+    // Startup as on the bench: the link-up backlog (pictures 130 ms late at
+    // first) and the 4 ms margin - locked within 8 s from either side: the
+    // pictures needing to come later (fast: frames can be much longer), or
+    // earlier (slow that way: only as fast as the camera's own lead, 8.5 us a
+    // frame - so the long way round, later, when that is quicker).
+    for (double start : { 7000.0, 11000.0, 15000.0, 3000.0 }) {
+        Sim s;
+        s.margin = 4000;
+        s.backlog = 130000;
+        s.start_phase = start;
+        run(s, 60, 20);
+        std::printf("startup from %.0f us: locked at %.1f s, %d of %d overtaken after 20 s\n", start,
+                    s.locked_at / 1e6, s.overtaken, s.frames);
+        CHECK(s.locked_at > 0 && s.locked_at < 8000000);
         CHECK(s.overtaken <= 1);
     }
     // A camera slower than the screen by more than the air unit can take back
