@@ -107,9 +107,6 @@ static int ar_frame_index(int mode) { return mode == 0 ? 1 : 0; }
 // default), or stock's.
 static const char* kArFwLabels[] = { "STOCK", "OPEN8030" };
 static const int kArFwCount = 2;
-// DEBUG (decode stalls): when the OSD last started and finished drawing, us
-std::atomic<uint64_t> g_dbg_osd_t0{0}, g_dbg_osd_t1{0};
-
 // DISPLAY > Refresh Sync's values (g_display_lock).
 static const char *refresh_sync_label(int v) {
     return v == 3 ? "CAMERA" : v == 2 ? "FREE" : v == 1 ? "ON" : "OFF";
@@ -3921,11 +3918,7 @@ void OSD::run() {
     // Paint the idle screen immediately instead of waiting for the first
     // background-video frame (or the 1 s refresh timeout) — gets pixels on the
     // display ~200 ms sooner at cold start.
-    if (!gl_buffers.empty()) {
-        g_dbg_osd_t0.store(get_time_us());   // DEBUG (decode stalls)
-        render_gl();
-        g_dbg_osd_t1.store(get_time_us());
-    }
+    if (!gl_buffers.empty()) render_gl();
 
     // Render pacing. The HUD is redrawn when something on it changes, at a
     // rate that fits what is changing, and never just because a video frame
@@ -3999,11 +3992,7 @@ void OSD::run() {
         anim_pending_ = false;   // this frame answers it; render_gl asks again if still animating
         pthread_mutex_unlock(&osd_mutex);
         loop_start_us_ = get_time_us();
-        if (!gl_buffers.empty()) {
-            g_dbg_osd_t0.store(get_time_us());   // DEBUG (decode stalls)
-            render_gl();
-            g_dbg_osd_t1.store(get_time_us());
-        }
+        if (!gl_buffers.empty()) render_gl();
     }
 }
 
@@ -4021,24 +4010,6 @@ uint64_t OSD::next_render_interval_us() {
     // up 400 ms into a stall) - 10 Hz is ample for all of them.
     if (link_watch_ || hud_connected_)
         us = std::min<uint64_t>(us, 100000);
-    // DEBUG (decode stalls): echo <ms> > /tmp/kestrel-osd-ms - draw this often
-    // instead, looked at every 2 s
-    {
-        static uint64_t checked = 0;
-        static int ms = 0;
-        const uint64_t t = get_time_us();
-        if (t - checked > 2000000) {
-            checked = t;
-            int v = 0;
-            if (FILE *f = fopen("/tmp/kestrel-osd-ms", "r")) {
-                if (fscanf(f, "%d", &v) != 1) v = 0;
-                fclose(f);
-            }
-            if (v != ms) printf("osd: DEBUG drawing every %d ms (0: as usual)\n", v);
-            ms = v;
-        }
-        if (ms > 0 && !anim) us = (uint64_t)ms * 1000;
-    }
     return us;
 }
 
