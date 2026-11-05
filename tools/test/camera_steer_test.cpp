@@ -144,6 +144,26 @@ int main() {
         CHECK(s.locked_at > 0 && s.locked_at < 8000000);
         CHECK(s.overtaken <= 1);
     }
+    // 1080p100 on the goggle X: a 10 ms refresh, the Lite+ at 100.128 fps
+    // (+12.8 us a frame to match), delivery spread ~5 ms, the bench's 4 ms
+    // margin. Delivery spread plus margin no longer fit in a refresh: placed
+    // by the late side alone, the early pictures land in the slot before and
+    // overtake the one waiting there. The spread has to sit inside the slot.
+    {
+        Sim s;
+        s.Pm = 10000;
+        s.Pc0 = 9987.2;
+        s.cutoff = 1300;
+        s.jitter = 2000;
+        s.gop_late = 0;               // GOP 340: GOP starts rare
+        s.margin = 4000;
+        s.backlog = 130000;
+        run(s, 90, 30);
+        std::printf("100 fps: locked at %.1f s, %d of %d overtaken, trim %.1f..%.1f us\n", s.locked_at / 1e6,
+                    s.overtaken, s.frames, s.trim_min, s.trim_max);
+        CHECK(s.locked_at > 0 && s.locked_at < 10000000);
+        CHECK(s.overtaken <= s.frames / 500);
+    }
     // A camera slower than the screen by more than the air unit can take back
     // (it only makes frames longer): never locks, and asks for nothing faster.
     {

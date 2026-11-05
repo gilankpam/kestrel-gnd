@@ -481,8 +481,9 @@ void DisplayLock::run() {
             if (now >= st_log_t + 5000000) {
                 st_log_t = now;
                 printf("display lock: camera steer: %s, error %+.0f us, trim %+.2f us a frame (rate %+.2f, last window's "
-                       "%+.2f), delivery p99 %.1f ms\n", kStateName[(int)steer_->state()], steer_->error_us(),
-                       steer_->trim_us(), steer_->centre_us(), steer_->neutral_us(), steer_->allowance_us() / 1000);
+                       "%+.2f), delivery p1 %.1f p99 %.1f ms, guard %.1f ms\n", kStateName[(int)steer_->state()],
+                       steer_->error_us(), steer_->trim_us(), steer_->centre_us(), steer_->neutral_us(),
+                       steer_->fast_us() / 1000, steer_->allowance_us() / 1000, steer_->guard_us() / 1000);
                 fflush(stdout);
             }
             dev_->set_frame_period(0);

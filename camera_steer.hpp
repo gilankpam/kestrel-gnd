@@ -121,6 +121,8 @@ public:
     double error_us() const { return err_; }
     double centre_us() const { return centre_; }
     double allowance_us() const { return allow_; }
+    double fast_us() const { return fast_; }
+    double guard_us() const { return guard_; }
     double neutral_us() const { return neutral_; }
 
 private:
@@ -145,6 +147,9 @@ private:
                 const size_t i = std::min(l.size() - 1, (size_t)(0.99 * (double)l.size()));
                 std::nth_element(l.begin(), l.begin() + i, l.end());
                 allow_ = l[i];
+                const size_t j = (size_t)(0.01 * (double)l.size());
+                std::nth_element(l.begin(), l.begin() + j, l.end());
+                fast_ = l[j];
             }
         }
         std::vector<double> cs;
@@ -160,7 +165,15 @@ private:
         // Where the captures will be when a trim sent now is at the sensor:
         // the window's line carried on (its median, without one).
         const double c = fit_ok_ ? fit_icpt_ + fit_slope_ * ((double)(now_us + kSkipUs - fit_t0_) / 1e6) : cs[n / 2];
-        double e = c + allow_ + margin_ - D;
+        // The whole spread of delivery has to fit between two deadlines: a
+        // picture ready before the one before its own goes up a refresh early,
+        // over the one still waiting there. So the guard before the deadline
+        // is the margin where there is room for it, else half of what the
+        // spread leaves of the slot (100 fps: a 10 ms slot, ~5 ms of spread,
+        // and the 4 ms margin did not fit - the fast pictures overtook).
+        const double slot = k_ * Pm_;
+        guard_ = std::min(margin_, std::max(0.0, (slot - (allow_ - fast_)) / 2));
+        double e = c + allow_ + guard_ - D;
         e -= Pm_ * std::round(e / Pm_);
         if (state_ == State::Acquiring && have_route_) {
             // the way chosen, followed on: the error continuous from the last window's
@@ -274,6 +287,7 @@ private:
     bool open_ = false, have_centre_ = false, have_route_ = false;
     uint64_t win_start_ = 0, last_window_ = 0, acq_since_ = 0, oor_since_ = 0;
     double win_trim_ = 0, trim_ = 0, centre_ = 0, err_ = 0, allow_ = 0, neutral_ = 0;
+    double fast_ = 0, guard_ = 0;                    // delivery's 1st percentile; the guard before the deadline
     double Pm_ = 16666.667, fps_ = 60;
     bool fit_ok_ = false;                            // the last window's line, through its captures
     uint64_t fit_t0_ = 0;
