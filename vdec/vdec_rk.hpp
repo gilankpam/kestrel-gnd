@@ -64,6 +64,9 @@ class VdecRK : public Vdec {
         // packets in a row with no picture out (see keyframe_in()).
         std::atomic<bool> key_in_{false};
         std::atomic<unsigned> fed_since_out_{0};
+        // DEBUG (decode stalls): per picture fed, its bytes and how long decode_put_packet took, us
+        std::mutex dbg_feed_m_;
+        std::unordered_map<int64_t, std::pair<uint32_t, uint32_t>> dbg_feed_;
         static constexpr unsigned kKeyLostPackets = 240;
 
         bool first_successful_decode = false;

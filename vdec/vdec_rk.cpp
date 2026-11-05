@@ -333,6 +333,41 @@ void VdecRK::run_frame()
                         }
                     }
 
+                    // DEBUG (decode stalls): every 5 s, the decodes over 5 ms - each
+                    // with its bytes, how long feeding it took, the gap since the
+                    // picture before came out, and that one's decode.
+                    {
+                        static uint64_t prev_out = 0, win = 0;
+                        static double prev_dec = 0;
+                        static unsigned n_all = 0, n_slow = 0;
+                        static std::string slow;
+                        uint32_t bytes = 0, put_us = 0;
+                        {
+                            std::lock_guard<std::mutex> lk(dbg_feed_m_);
+                            auto f = dbg_feed_.find((int64_t)pts);
+                            if (f != dbg_feed_.end()) { bytes = f->second.first; put_us = f->second.second; dbg_feed_.erase(f); }
+                        }
+                        const double dec = found_stats && now_us > t_stats.decode_start_us
+                                               ? (now_us - t_stats.decode_start_us) / 1000.0 : -1;
+                        n_all++;
+                        if (dec > 5) {
+                            n_slow++;
+                            if (slow.size() < 900) {
+                                char b[128];
+                                snprintf(b, sizeof(b), " [%llu %.1f ms, %u B, put %.1f, gap %.1f, prev %.1f]",
+                                         (unsigned long long)pts, dec, bytes, put_us / 1000.0,
+                                         prev_out ? (now_us - prev_out) / 1000.0 : -1.0, prev_dec);
+                                slow += b;
+                            }
+                        }
+                        prev_out = now_us;
+                        prev_dec = dec;
+                        if (!win) win = now_us;
+                        if (now_us - win >= 5000000) {
+                            printf("VdecRK: DEBUG %u of %u decodes over 5 ms:%s\n", n_slow, n_all, slow.c_str());
+                            win = now_us; n_all = n_slow = 0; slow.clear();
+                        }
+                    }
                     if (found_stats) {
                         auto du_stat = std::make_shared<DecodedUnit>();
                         du_stat->pts = pts;
@@ -625,6 +660,15 @@ void VdecRK::feed_packet_to_decoder(void* data_p, int data_len, int64_t pts, uin
     
     if (attempt > 1) {
         printf("VdecRK: decode_put_packet succeeded after attempt=%d, elapsed=%lu ms\n", attempt, get_time_ms() - data_feed_begin);
+    }
+    {   // DEBUG (decode stalls)
+        std::lock_guard<std::mutex> lk(dbg_feed_m_);
+        auto &f = dbg_feed_[pts];
+        f.first += (uint32_t)final_len;
+        f.second += (uint32_t)(get_time_us() - put_start_us);
+        if (dbg_feed_.size() > 256)
+            for (auto it = dbg_feed_.begin(); it != dbg_feed_.end();)
+                it = (it->first < pts - 128) ? dbg_feed_.erase(it) : std::next(it);
     }
     mpp_packet_deinit(&pkt);
 }
