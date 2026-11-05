@@ -242,7 +242,14 @@ void VdecRK::run_frame()
 	while (!*should_stop) { // TODO frm_eos for proper closing.
 		struct timespec ts, ats;
 		assert(!frame);
+		// DEBUG (decode stalls): this thread's own time since the last call,
+		// and how long decode_get_frame then waited
+		static uint64_t dbg_call_end = 0;
+		const uint64_t dbg_call = get_time_us();
+		const double dbg_busy = dbg_call_end ? (dbg_call - dbg_call_end) / 1000.0 : 0;
 		ret = mpi.mpi->decode_get_frame(mpi.ctx, &frame);
+		const double dbg_wait = (get_time_us() - dbg_call) / 1000.0;
+		dbg_call_end = get_time_us();
 		if (ret != 0) {
 			static int err_count = 0;
 			if (err_count++ % 100 == 0) {
@@ -340,6 +347,10 @@ void VdecRK::run_frame()
                         static uint64_t prev_out = 0, win = 0;
                         static double prev_dec = 0;
                         static unsigned n_all = 0, n_slow = 0;
+                        static int free_min = 99;
+                        // the decoder's output buffers not in use: none left and it waits for one
+                        const int free_now = mpi.frm_grp ? (int)mpp_buffer_group_unused(mpi.frm_grp) : -1;
+                        if (free_now >= 0 && free_now < free_min) free_min = free_now;
                         static std::string slow;
                         uint32_t bytes = 0, put_us = 0;
                         {
@@ -354,9 +365,15 @@ void VdecRK::run_frame()
                             n_slow++;
                             if (slow.size() < 900) {
                                 char b[128];
-                                snprintf(b, sizeof(b), " [%llu %.1f ms, %u B, put %.1f, gap %.1f, prev %.1f]",
-                                         (unsigned long long)pts, dec, bytes, put_us / 1000.0,
-                                         prev_out ? (now_us - prev_out) / 1000.0 : -1.0, prev_dec);
+                                // the OSD's last draw: its start against this decode's, and how long it took
+                                extern std::atomic<uint64_t> g_dbg_osd_t0, g_dbg_osd_t1;
+                                const uint64_t o0 = g_dbg_osd_t0.load(), o1 = g_dbg_osd_t1.load();
+                                const double osd_at = o0 ? ((double)o0 - (double)t_stats.decode_start_us) / 1000.0 : 0;
+                                const double osd_len = o1 >= o0 ? (o1 - o0) / 1000.0 : (now_us - o0) / 1000.0;
+                                snprintf(b, sizeof(b), " [%llu %.1f ms, gap %.1f, this thread busy %.1f then waited %.1f, osd %+.1f for %.1f%s]",
+                                         (unsigned long long)pts, dec,
+                                         prev_out ? (now_us - prev_out) / 1000.0 : -1.0, dbg_busy, dbg_wait, osd_at, osd_len,
+                                         o1 >= o0 ? "" : " still");
                                 slow += b;
                             }
                         }
@@ -364,8 +381,9 @@ void VdecRK::run_frame()
                         prev_dec = dec;
                         if (!win) win = now_us;
                         if (now_us - win >= 5000000) {
-                            printf("VdecRK: DEBUG %u of %u decodes over 5 ms:%s\n", n_slow, n_all, slow.c_str());
-                            win = now_us; n_all = n_slow = 0; slow.clear();
+                            printf("VdecRK: DEBUG %u of %u decodes over 5 ms, fewest output buffers free %d of %d:%s\n",
+                                   n_slow, n_all, free_min, MAX_FRAMES, slow.c_str());
+                            win = now_us; n_all = n_slow = 0; slow.clear(); free_min = 99;
                         }
                     }
                     if (found_stats) {
