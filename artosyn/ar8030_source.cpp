@@ -1942,6 +1942,26 @@ int Ar8030Source::wait_sky_status(uint8_t want_cmd, int timeout_ms) {
     return -1;
 }
 
+// SPIKE: Refresh Sync CAMERA's frame length, to a kestrel-air every 250 ms
+// while the display lock steers. No ack awaited; a lost one is resent. The
+// air unit goes back to its own frame after the hold (1 s) without one.
+void Ar8030Source::send_frame_trim() {
+    if (ctrl_sockfd < 0 || !air_kestrel_ || !g_camera_steer.load(std::memory_order_relaxed)) return;
+    const uint64_t now = now_ms();
+    const int32_t ns = g_camera_trim_ns.load(std::memory_order_relaxed);
+    // a new trim at once (the controller times its windows from it), the same
+    // again every 250 ms so the air unit's hold never runs out
+    if (ns == trim_sent_ns_ && now < trim_sent_ms_ + 250) return;
+    trim_sent_ms_ = now;
+    trim_sent_ns_ = ns;
+    const uint16_t hold = 1000;
+    uint8_t v[6];
+    memcpy(v, &ns, 4);
+    memcpy(v + 4, &hold, 2);
+    std::vector<uint8_t> f = sky_proto.build(sky::CMD_KA_FRAME_TRIM, v, sizeof(v));
+    bb_socket_write(ctrl_sockfd, f.data(), (uint32_t)f.size(), 50);
+}
+
 // Drain whatever the menu parked and push it to the camera. Each of these is a
 // 4-byte little-endian value; the ids come from the GUI dispatcher in
 // ar_ldy_gnd.
@@ -4901,6 +4921,7 @@ void Ar8030Source::run() {
             }
         }
         apply_pending_settings();
+        send_frame_trim();
         apply_pending_rf();
         // Binding, if the menu or the front-panel button asked for it. One
         // non-blocking step per pass; it owns the baseband only in short

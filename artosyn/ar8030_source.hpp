@@ -657,6 +657,9 @@ class Ar8030Source {
         void  save_sky_link();
         std::vector<uint8_t> build_config_frame(const uint8_t *tmpl, size_t len);
         void apply_pending_settings();
+        void send_frame_trim();           // SPIKE: camera steering (g_camera_trim_ns)
+        uint64_t trim_sent_ms_ = 0;
+        int32_t trim_sent_ns_ = INT32_MIN;
         void apply_pending_rf();
         // A camera setting sent and not acknowledged yet. Its ack is picked
         // out of whatever the control socket brings in (on_ctrl_bytes), read

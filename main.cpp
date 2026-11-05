@@ -528,6 +528,9 @@ int main(int argc, char **argv)
 		const int v = have_screen_id
 			? Settings::getInstance().getInt(std::string("display_lock_") + screen_id_buf, 0) : 0;
 		g_display_lock = v >= 0 && v <= 2 ? v : 0;   // OFF, ON, FREE
+		// SPIKE: camera steering (3) on every screen, whatever is saved.
+		g_display_lock = 3;
+		printf("display lock: SPIKE - Refresh Sync CAMERA forced on\n");
 	}
 	g_display_lock_slice = Settings::getInstance().getInt("display_lock_slice", 1) == 2 ? 2 : 1;
 	{

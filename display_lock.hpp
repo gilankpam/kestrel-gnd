@@ -5,8 +5,10 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 class DrmDevice;
+namespace display { class CameraSteer; }
 
 // DISPLAY > Refresh Sync: the screen's refresh held in step with the pictures,
 // on the goggle alone. It watches when each picture reaches the renderer, finds
@@ -71,6 +73,7 @@ private:
 
     std::mutex m_;                    // arrivals_in_
     std::deque<uint64_t> arrivals_in_;
+    std::deque<std::pair<uint64_t, uint64_t>> steer_in_;   // CAMERA: (capture, ready) per picture
     std::deque<uint64_t> caps_;       // capture stamps, the last 10 s, of one frame rate
     int caps_mode_ = 0;               // (lines << 16) | fps they are of
     uint64_t last_pts_ = UINT64_MAX, early_pts_ = UINT64_MAX, early_t_ = 0;
@@ -86,4 +89,8 @@ private:
     // phase after the vblank before it, plus the shift applied so far (G).
     struct Sample { uint64_t t_us; double u; };
     std::deque<Sample> win_;
+
+    // CAMERA (Refresh Sync 3): the camera steered, the screen left alone.
+    std::unique_ptr<display::CameraSteer> steer_;
+    double steer_margin_ = 0;
 };

@@ -1,5 +1,6 @@
 #include "display_lock.hpp"
 #include "lock_step.hpp"
+#include "camera_steer.hpp"
 #include "drm.hpp"
 #include "frame_mode.hpp"
 #include "settings.hpp"
@@ -16,6 +17,8 @@
 #include <vector>
 
 std::atomic<int> g_display_lock{0};
+std::atomic<int> g_camera_trim_ns{0};
+std::atomic<bool> g_camera_steer{false};
 std::atomic<int> g_display_lock_slice{1};
 std::atomic<int> g_display_lock_margin_us{0};
 std::atomic<float> g_dl_mode_hz{0}, g_dl_camera_fps{0};
@@ -81,6 +84,7 @@ void DisplayLock::note_unit(uint64_t pts, bool early, uint64_t t_us, uint64_t la
     const bool by_top = g_display_lock_slice.load(std::memory_order_relaxed) != 2;
     if (pts == early_pts_ && by_top) ready = halves ? early_t_ : last_in_us ? std::min(t_us, std::max(early_t_, last_in_us)) : t_us;
     if (arrivals_in_.size() < 1000) arrivals_in_.push_back(ready);
+    if (cap_us && steer_in_.size() < 1000) steer_in_.push_back({ cap_us, ready });   // CAMERA
 }
 
 // The span of the stamps over the pictures it holds, those counted from the
@@ -237,6 +241,7 @@ void DisplayLock::run() {
     uint64_t aim_t = 0;
     int pc_mode = -1;                 // (lines << 16) | fps pc_known is of
     int dir_said = 0;                 // ON: the way frames were last said to move (1 longer, -1 shorter)
+    uint64_t st_log_t = 0;            // CAMERA: the last 5 s line
     std::vector<uint64_t> in;
 
     while (run_.load(std::memory_order_relaxed)) {
@@ -330,6 +335,11 @@ void DisplayLock::run() {
         g_dl_why.store(on ? nullptr : why, std::memory_order_relaxed);
         g_dl_holding.store(on, std::memory_order_relaxed);
         if (!on) {
+            g_camera_steer.store(false, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                steer_in_.clear();
+            }
             if (d_ != 0) {
                 write_lines(0, vb, Pm);
             } else if (!released_) {
@@ -349,10 +359,12 @@ void DisplayLock::run() {
             continue;
         }
         const bool free = lock == 2;
+        const bool camera = lock == 3;
         if (why_said) {
             why_said = nullptr;
             printf("display lock: on (%s) - holding the vblank just after the pictures arrive\n",
-                   free ? "FREE: each frame as long as the camera's" : "one line at a time");
+                   camera ? "CAMERA: the camera steered, the screen left alone"
+                          : free ? "FREE: each frame as long as the camera's" : "one line at a time");
             fflush(stdout);
         }
 
@@ -433,6 +445,50 @@ void DisplayLock::run() {
             }
         }
 
+        // CAMERA: the screen's timing never changes; the camera's frames are
+        // made a little longer so each picture is ready a margin before its
+        // vblank's commit deadline (camera_steer.hpp, after mabur's phase lock).
+        // The margin is DISPLAY > Sync Margin, at least 1 ms.
+        if (camera) {
+            if (d_ != 0) write_lines(0, vb, Pm);
+            else if (!released_) release();
+            const double margin = std::max(1000.0, (double)g_display_lock_margin_us.load(std::memory_order_relaxed));
+            if (!steer_ || steer_margin_ != margin) {
+                steer_.reset(new display::CameraSteer(margin, cutoff_us_));
+                steer_margin_ = margin;
+                printf("display lock: camera steer: ready %.1f ms before each commit deadline\n", margin / 1000);
+                fflush(stdout);
+            }
+            const double fpsc = Pc > 0 ? 1e6 / Pc : 60;
+            const int k = std::max(1, (int)std::lround(Pc / Pm));
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                for (const auto &f : steer_in_) steer_->on_frame(f.first, f.second, vb, Pm, k, fpsc);
+                steer_in_.clear();
+            }
+            static const char *const kStateName[] = { "waiting", "acquiring", "locked", "out of range" };
+            const auto st0 = steer_->state();
+            if (steer_->tick(now)) {
+                g_camera_trim_ns.store((int)std::lround(steer_->trim_us() * 1000), std::memory_order_relaxed);
+                if (steer_->state() != st0) {
+                    printf("display lock: camera steer %s - error %+.0f us, trim %+.2f us a frame, rate %+.2f, "
+                           "delivery p99 %.1f ms\n", kStateName[(int)steer_->state()], steer_->error_us(),
+                           steer_->trim_us(), steer_->centre_us(), steer_->allowance_us() / 1000);
+                    fflush(stdout);
+                }
+            }
+            g_camera_steer.store(steer_->steering(), std::memory_order_relaxed);
+            if (now >= st_log_t + 5000000) {
+                st_log_t = now;
+                printf("display lock: camera steer: %s, error %+.0f us, trim %+.2f us a frame (rate %+.2f, last window's "
+                       "%+.2f), delivery p99 %.1f ms\n", kStateName[(int)steer_->state()], steer_->error_us(),
+                       steer_->trim_us(), steer_->centre_us(), steer_->neutral_us(), steer_->allowance_us() / 1000);
+                fflush(stdout);
+            }
+            dev_->set_frame_period(0);
+            continue;
+        }
+
         int want = d_;
         if (!have_target) {
             want = free ? (int)std::lround(B) : 0;
@@ -486,6 +542,7 @@ void DisplayLock::run() {
         dev_->set_frame_period(d_ ? (mode.vtotal + d_) * line : 0);
     }
     in_step_ = false;
+    g_camera_steer.store(false, std::memory_order_relaxed);
     dev_->set_frame_period(0);
     if (reg_ && !released_) {
         uint32_t s;

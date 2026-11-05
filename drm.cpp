@@ -377,6 +377,7 @@ void DrmDevice::check_follow_camera() {
 // clock the driver refused is not asked for again.
 void DrmDevice::check_clock_trim() {
     if (!follow_camera || !display_connected) return;
+    if (g_display_lock.load(std::memory_order_relaxed) == 3) return;   // SPIKE: CAMERA leaves the screen alone
     const int fps = g_camera_fps.load(std::memory_order_acquire);
     const int lines = g_camera_lines.load(std::memory_order_relaxed);
     if (fps <= 0) return;

@@ -33,6 +33,11 @@ static inline std::string camera_period_key(int lines, int fps) {
 // DISPLAY > Refresh Sync for the screen in use ("display_lock_<screen ID>"):
 // the display lock (display_lock.hpp) holds the vblank just after the pictures.
 extern std::atomic<int> g_display_lock;
+// SPIKE (camera steering, Refresh Sync CAMERA = 3): the camera's frames this
+// much longer (negative: shorter), ns, asked of a kestrel-air every 250 ms
+// while g_camera_steer is on (sky cmd 0x43).
+extern std::atomic<int> g_camera_trim_ns;
+extern std::atomic<bool> g_camera_steer;
 // DISPLAY > Sync To ("display_lock_slice"): which part of a picture the lock
 // times the refresh to - 1, its first slice (its top, with each half on its
 // own plane), the default; 2, its last slice (the whole picture).

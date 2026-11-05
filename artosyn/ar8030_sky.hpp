@@ -74,6 +74,7 @@ enum Cmd : uint8_t {
     CMD_KA_MAX_BITRATE    = 0x40,  // u32 kbps, 0 = none - kestrel-air only (stock logs and ignores it)
     CMD_KA_MAX_BW         = 0x41,  // u8 MHz, 20 or 40 (0 = none) - kestrel-air only
     CMD_KA_LOGS           = 0x42,  // u8 1/0: the air unit keeps flight logs on its flash - kestrel-air only
+    CMD_KA_FRAME_TRIM     = 0x43,  // SPIKE: s32 ns a frame, u16 hold ms - kestrel-air only
 };
 
 // The FPV-channel (ch0) video modes this camera accepts, taken from the mode

@@ -109,7 +109,7 @@ static const char* kArFwLabels[] = { "STOCK", "OPEN8030" };
 static const int kArFwCount = 2;
 // DISPLAY > Refresh Sync's values (g_display_lock).
 static const char *refresh_sync_label(int v) {
-    return v == 2 ? "FREE" : v == 1 ? "ON" : "OFF";
+    return v == 3 ? "CAMERA" : v == 2 ? "FREE" : v == 1 ? "ON" : "OFF";
 }
 
 std::vector<std::pair<const char*, int>> OSD::ar_rf_items() const {
@@ -5428,7 +5428,7 @@ void OSD::menu_apply_change(int tab, int index, int dir) {
             // Enter, the kept value back after 10 s without it. OFF, or the
             // kept value itself, is kept at once.
             const int was = g_display_lock.load();
-            menu_refresh_sync = menu_step(menu_refresh_sync, dir, 3);
+            menu_refresh_sync = menu_step(menu_refresh_sync, dir, 4);   // SPIKE: CAMERA
             if (!menu_stepping_) {
                 const std::string key = screen_id_.empty() ? std::string("display_lock")
                                                            : "display_lock_" + screen_id_;
