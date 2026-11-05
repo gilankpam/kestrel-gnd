@@ -132,6 +132,10 @@ private:
     std::atomic<bool> refollow_{false};
     void check_follow_camera();
     bool set_crtc_mode(const drmModeModeInfo& m);
+    // ... and its pixel clock trimmed to the camera's measured rate.
+    uint32_t trim_refused_clock_ = 0;  // a clock the driver refused, kHz
+    uint32_t trim_said_clock_ = 0;     // one said to be too far off, kHz
+    void check_clock_trim();
 
     // Render-cadence tracking (guarded by stats_mutex, written in the flip handler)
     static const int CADENCE_RING = 256;

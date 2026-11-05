@@ -17,11 +17,13 @@ class DrmDevice;
 //
 // Per screen ("display_lock_<screen ID>"), off unless turned on, as screens
 // differ: the AW3225QF blanks on any change.
-//  ON (1): one line at a time, longer only, with the refresh a whole multiple
-//      of the camera's frame rate - the BOE1080 takes +1 held and +-1
-//      alternating, and blanked on +3 held and on long runs of shorter frames.
-//      A "100 fps" camera is not 100.000 (the Lite+ runs 100.13), and against a
-//      slower screen this cannot hold.
+//  ON (1): one line at a time, with the refresh a whole multiple of the
+//      camera's frame rate - the BOE1080 takes +1 held and +-1 alternating,
+//      and blanked on +3 held and on long runs of shorter frames. One way
+//      only (lock_step.hpp): longer against a faster screen, shorter against
+//      a slower one - a "100 fps" camera is not 100.000 (the Lite+ runs
+//      100.13, and 60.03 at 60), so a screen at the mode's own rate is the
+//      slower, and there about every other frame is a line short.
 //  FREE (2): the screen takes any frame length (the CPO1F41 shows 118 Hz, 100
 //      Hz... as the total changes, and keeps its picture): each frame is made
 //      as long as one camera frame (lines added to the screen's fastest mode,

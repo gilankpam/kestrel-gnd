@@ -1,4 +1,5 @@
 #include "display_lock.hpp"
+#include "lock_step.hpp"
 #include "drm.hpp"
 #include "frame_mode.hpp"
 #include "settings.hpp"
@@ -235,6 +236,7 @@ void DisplayLock::run() {
     double aim_us = 0;                // test: the vblank this much earlier than the best (A/B)
     uint64_t aim_t = 0;
     int pc_mode = -1;                 // (lines << 16) | fps pc_known is of
+    int dir_said = 0;                 // ON: the way frames were last said to move (1 longer, -1 shorter)
     std::vector<uint64_t> in;
 
     while (run_.load(std::memory_order_relaxed)) {
@@ -339,6 +341,7 @@ void DisplayLock::run() {
                 fflush(stdout);
                 why_said = why;
                 locked_said = false;
+                dir_said = 0;
             }
             std::lock_guard<std::mutex> lk(m_);
             arrivals_in_.clear();
@@ -454,22 +457,29 @@ void DisplayLock::run() {
                 fflush(stdout);
             }
         } else {
-            // Later only: frames made longer, never shorter (the BOE1080 blanked
-            // with them shortened for long). A vblank a little late comes back
-            // with the drift if the screen is the faster; one far too late goes
-            // round the other way, up to a refresh later.
-            double e = wrap(target - G, Pt);
-            if (e < -Pt / 4) e += Pt;
-            if (!moving && e > 3 * line) moving = true;
-            if (moving && e < 0.5 * line) {
+            // A line at a time, one way only (lock_step.hpp): longer where the
+            // screen is the faster, shorter where it is the slower (60.000 Hz
+            // against the Lite+'s 60.03 fps) - longer only, there, went round a
+            // whole refresh every 12 s. Never both ways: the drift brings the
+            // vblank back the other way, so a line one way is all it needs.
+            // Until the camera's period is measured it is the mode's: longer.
+            const double k = std::max(1.0, std::round(Pc / Pm));
+            const bool shorter = k * Pm > Pc * (1 + 1e-6);
+            if ((shorter ? -1 : 1) != dir_said) {
+                dir_said = shorter ? -1 : 1;
                 moving = false;
-                if (!locked_said) {
-                    locked_said = true;
-                    printf("display lock: in step\n");
-                    fflush(stdout);
-                }
+                printf("display lock: frames made only %s (the screen %s than the camera)\n",
+                       shorter ? "shorter" : "longer", shorter ? "slower" : "no slower");
+                fflush(stdout);
             }
-            want = moving && e > 0 ? 1 : 0;
+            const display::LineStep s = display::line_step(wrap(target - G, Pt), Pt, line, shorter, moving);
+            moving = s.moving;
+            if (s.arrived && !locked_said) {
+                locked_said = true;
+                printf("display lock: in step\n");
+                fflush(stdout);
+            }
+            want = s.lines;
         }
         if (want != d_) write_lines(want, vb, Pm);
         else if (want == 0 && !released_) release();

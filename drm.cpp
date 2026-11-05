@@ -314,6 +314,7 @@ void DrmDevice::handle_events() {
         if (now - last_hotplug_check_us >= 2000000) {
             last_hotplug_check_us = now;
             check_display_hotplug();
+            check_clock_trim();
         }
         check_follow_camera();
     }
@@ -365,6 +366,53 @@ void DrmDevice::check_follow_camera() {
            in_step ? "" : ", the screen has no refresh in step with it at this size");
     fflush(stdout);
     if (!same) set_crtc_mode(m);
+}
+
+// Screen Mode Auto in step with the camera's own rate, not the one its mode
+// is named by (a "100 fps" Lite+ runs 100.13): the mode modeset_pick_follow
+// picks, its pixel clock trimmed to the camera's frame period as the display
+// lock measured it (camera_period_key). The lines stay the mode's, so the
+// screen sees one steady timing - the goggle X shows static while Refresh
+// Sync changes them at 1080p100. Within 0.5% of the mode's own clock; a
+// clock the driver refused is not asked for again.
+void DrmDevice::check_clock_trim() {
+    if (!follow_camera || !display_connected) return;
+    const int fps = g_camera_fps.load(std::memory_order_acquire);
+    const int lines = g_camera_lines.load(std::memory_order_relaxed);
+    if (fps <= 0) return;
+    const double pc = Settings::getInstance().getFloat(camera_period_key(lines, fps), 0.0f);
+    if (pc * fps < 0.99e6 || pc * fps > 1.01e6) return;
+
+    drmModeConnector *conn = drmModeGetConnectorCurrent(drm_fd, output_list->connector.id);
+    if (!conn) return;
+    const drmModeModeInfo cur = current_mode();
+    const int pick = modeset_pick_follow(conn, (uint32_t)fps, cur.hdisplay, cur.vdisplay);
+    drmModeModeInfo m = {};
+    if (pick >= 0) m = conn->modes[pick];
+    drmModeFreeConnector(conn);
+    // Only the mode Auto is on: another timing is the user's, or a change on its way.
+    if (pick < 0 || m.htotal != cur.htotal || m.vtotal != cur.vtotal || m.hsync_start != cur.hsync_start ||
+        m.vsync_start != cur.vsync_start)
+        return;
+
+    const double k = std::max(1.0, std::round(modeset_mode_hz(&m) / fps));
+    const uint32_t clock = (uint32_t)std::lround((double)m.htotal * m.vtotal * k * 1e3 / pc);   // kHz
+    if (clock == cur.clock || clock == trim_refused_clock_) return;
+    // Trimmed already: each change is a modeset, a blank, so not for the
+    // camera's period remeasured a few ppm off (the lock keeps a new one at 20).
+    if (cur.clock != m.clock && std::fabs((double)clock / cur.clock - 1.0) < 50e-6) return;
+    if (std::fabs((double)clock / m.clock - 1.0) > 0.005) {
+        if (clock != trim_said_clock_)
+            printf("display: not trimming %dx%d@%d to the camera's %.4f fps - %u kHz is over 0.5%% from %u kHz\n",
+                   m.hdisplay, m.vdisplay, m.vrefresh, 1e6 / pc, clock, m.clock);
+        trim_said_clock_ = clock;
+        return;
+    }
+    m.clock = clock;
+    printf("display: %dx%d@%d clock %u -> %u kHz, refresh %.4f Hz for the camera's %.4f fps\n",
+           m.hdisplay, m.vdisplay, m.vrefresh, cur.clock, clock, modeset_mode_hz(&m), 1e6 / pc);
+    fflush(stdout);
+    if (!set_crtc_mode(m)) trim_refused_clock_ = clock;
 }
 
 // The CRTC's mode, and nothing else: the planes keep their buffers and
