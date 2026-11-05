@@ -561,6 +561,26 @@ void Renderer::run(){
                 // shown: that one goes first, and the early one's whole follows.
                 if (du->early && latest_frame && !latest_frame->early) continue;
                 if (latest_frame && !latest_frame->early) {
+                    // DEBUG (56/60): where in the refresh the two decodes ended.
+                    {
+                        dbg_replaced_++;
+                        uint64_t vb = 0;
+                        const double P = dev->frame_period_us();
+                        if (dbg_rep_.size() < 1400 && P > 0 && dev->last_vblank(&vb)) {
+                            // per picture, ms: capture -> last slice in -> decode start -> decode end
+                            auto tl = [](const DecodedUnit *u, char *o, size_t n) {
+                                const uint64_t cap = u->slices ? u->slices->frame_cap_us : 0;
+                                snprintf(o, n, "cap>in %.1f in>dec %.1f dec %.1f", cap && u->recv_ts > cap ? (u->recv_ts - cap) / 1000.0 : -1.0,
+                                         u->dec_start_ts > u->recv_ts ? (u->dec_start_ts - u->recv_ts) / 1000.0 : -(double)(u->recv_ts - u->dec_start_ts) / 1000.0,
+                                         (u->dec_end_ts - u->dec_start_ts) / 1000.0);
+                            };
+                            char a[80], c[80], b[220];
+                            tl(latest_frame.get(), a, sizeof(a));
+                            tl(du.get(), c, sizeof(c));
+                            snprintf(b, sizeof(b), " [%lld (%s) -> %lld (%s)]", (long long)latest_frame->pts, a, (long long)du->pts, c);
+                            dbg_rep_ += b;
+                        }
+                    }
                     // Replaced before it was shown: not sampled (the next one shown
                     // counts it as never shown). A keyframe takes the longest to decode, so the next picture
                     // is often ready right behind it and replaces it here. Its
@@ -666,6 +686,7 @@ void Renderer::run(){
 
         // 5. Hardware is guaranteed free (or we have no choice but to try), so render.
         if (render_frame(latest_frame.get())) {
+            if (!latest_frame->early) dbg_committed_++;   // DEBUG (56/60)
             if (latest_frame->early) {
                 early_shown_pts_ = latest_frame->pts;
                 early_flips_++;
@@ -727,6 +748,12 @@ bool Renderer::split_active() const {
 void Renderer::heartbeat(uint64_t now) {
     static uint64_t last_alive = 0;
     if (now - last_alive <= 5000000) return;
+    // DEBUG (56/60)
+    printf("renderer: DEBUG 5 s: %s, %u whole pictures committed, %u replaced before their commit, refresh %.1f us "
+           "(phase after the vblank, us: [replaced pts decoded -> by pts decoded, now]):%s\n",
+           halves_mode_ ? "halves" : "whole", dbg_committed_, dbg_replaced_, dev->frame_period_us(), dbg_rep_.c_str());
+    dbg_committed_ = dbg_replaced_ = 0;
+    dbg_rep_.clear();
     if (halves_whole_ || halves_split_ || halves_lower_)
         printf("renderer: each half on its own, 5 s: %u flips whole (%u of them early), %u top over an "
                "older lower part, %u lower part alone, %u tops a vblank late behind an older one, "

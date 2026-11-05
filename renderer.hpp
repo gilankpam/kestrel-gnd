@@ -180,6 +180,10 @@ class Renderer {
         // between the bottom half's estimated decode and the scan-out, us
         int early_margin_us_ = 1000;
         unsigned early_flips_ = 0, early_late_ = 0, early_held_ = 0, early_adopted_ = 0;
+        // DEBUG (56/60): whole pictures committed, and replaced before they were
+        // (each replacement's two decode ends, as a phase in the refresh, us)
+        unsigned dbg_committed_ = 0, dbg_replaced_ = 0;
+        std::string dbg_rep_;
         // The commit halves_commit is making: in halves at this row, with this
         // picture's lower part on the second plane (DrmDevice::page_flip).
         std::shared_ptr<DecodedUnit> split_bottom_;
