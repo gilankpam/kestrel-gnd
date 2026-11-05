@@ -31,7 +31,8 @@ struct Sim {
     double start_phase = 7000;        // where the first capture falls in the refresh
     double margin = 1000;             // ready this long before the deadline (DISPLAY > Sync Margin)
     bool trace = false;               // each window's figures
-    double backlog = 0;               // link-up: the first second's pictures this much later, us, falling to none
+    double backlog = 0;
+    double switch_at = -1, Pm2 = 0, Pc02 = 0, line2 = 0;   // a mode change: the screen and the camera, at switch_at s               // link-up: the first second's pictures this much later, us, falling to none
     // results, from `from_us` on
     int shown = 0, frames = 0, overtaken = 0;
     double trim_min = 1e9, trim_max = -1e9;
@@ -49,6 +50,10 @@ static void run(Sim &s, double seconds, double from_s, double step_at_s = -1, do
     long last_vb = -1;                // the vblank index the last picture went up at
     const uint64_t from = (uint64_t)(from_s * 1e6);
     for (int i = 0; cap < seconds * 1e6; i++) {
+        if (s.switch_at >= 0 && cap >= s.switch_at * 1e6 && s.Pm != s.Pm2) {
+            s.Pm = s.Pm2; s.Pc0 = s.Pc02; s.line = s.line2;
+            cap += 300000;            // the camera restarts in its new mode
+        }
         // the air unit: the trim asked for arrives air_lag later, dithered into whole lines
         while (np && pend[0].at <= cap) {
             applied = pend[0].trim;
@@ -153,6 +158,7 @@ int main() {
         Sim s;
         s.Pm = 10000;
         s.Pc0 = 9987.2;
+        s.air_lag = 120000;           // sent at once, 5 frames of 10 ms: much less than at 60
         s.cutoff = 1300;
         s.jitter = 2000;
         s.gop_late = 0;               // GOP 340: GOP starts rare
@@ -163,6 +169,62 @@ int main() {
                     s.overtaken, s.frames, s.trim_min, s.trim_max);
         CHECK(s.locked_at > 0 && s.locked_at < 10000000);
         CHECK(s.overtaken <= s.frames / 500);
+    }
+    // 100 fps from any phase, with the link-up backlog: the full reach moves
+    // the phase ~5.7 ms a window, over half the 10 ms refresh - the error
+    // followed window to window must not jump a refresh the wrong way (it ran
+    // away to -213 ms on the bench and gave up as out of range).
+    for (double start : { 1000.0, 3000.0, 5000.0, 7000.0, 9000.0 }) {
+        Sim s;
+        s.Pm = 10000;
+        s.Pc0 = 9987.2;
+        s.air_lag = 120000;           // sent at once, 5 frames of 10 ms: much less than at 60
+        s.jitter = 2000;
+        s.gop_late = 0;
+        s.margin = 4000;
+        s.backlog = 130000;
+        s.start_phase = start;
+        run(s, 60, 20);
+        std::printf("100 fps from %.0f us: locked at %.1f s, %d of %d overtaken after 20 s, trim %.1f..%.1f us\n",
+                    start, s.locked_at / 1e6, s.overtaken, s.frames, s.trim_min, s.trim_max);
+        CHECK(s.locked_at > 0 && s.locked_at < 10000000);
+        CHECK(s.overtaken <= s.frames / 500);
+        CHECK(s.trim_max < 30);
+    }
+    // The bench's sequence: kestrel-gnd comes up at 1080p60 on 60 Hz and
+    // locks, then the camera goes to 100 fps and the screen to 100 Hz. What
+    // was learnt at 60 must not carry over (it ran away to -213 ms there).
+    for (double start : { 2000.0, 7000.0, 12000.0 }) {
+        Sim s;
+        s.start_phase = start;
+        s.margin = 4000;
+        s.backlog = 130000;
+        s.switch_at = 20; s.Pm2 = 10000; s.Pc02 = 9987.2; s.line2 = 7.673;
+        s.air_lag = 120000;
+        s.jitter = 1500;
+        s.gop_late = 0;
+        run(s, 70, 40);
+        std::printf("60 -> 100 fps from %.0f us: %d of %d overtaken after 40 s, trim %.1f..%.1f us\n", start,
+                    s.overtaken, s.frames, s.trim_min, s.trim_max);
+        CHECK(s.overtaken <= s.frames / 500);
+        CHECK(s.trim_max < 30);
+    }
+    // 100 fps, locked, then delivery 7 ms faster (a bitrate dropped): a big
+    // correction at the whole reach moves the phase over half the refresh a
+    // window - each window's line and its error must still hold together.
+    for (double step : { -7000.0, 7000.0 }) {
+        Sim s;
+        s.Pm = 10000;
+        s.Pc0 = 9987.2;
+        s.air_lag = 120000;           // sent at once, 5 frames of 10 ms: much less than at 60
+        s.jitter = 1500;
+        s.gop_late = 0;
+        s.margin = 4000;
+        run(s, 90, 50, 30, step);
+        std::printf("100 fps, delivery %+.0f us at 30 s: %d of %d overtaken after 50 s, trim %.1f..%.1f us\n", step,
+                    s.overtaken, s.frames, s.trim_min, s.trim_max);
+        CHECK(s.overtaken <= s.frames / 500);
+        CHECK(s.trim_max < 30);
     }
     // A camera slower than the screen by more than the air unit can take back
     // (it only makes frames longer): never locks, and asks for nothing faster.

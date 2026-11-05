@@ -78,8 +78,12 @@ public:
         if (state_ == State::OutOfRange) return;
         double c = std::fmod((double)((int64_t)cap_us - (int64_t)vb_us), Pm);
         if (c < 0) c += Pm;
-        // one continuous line within the window, across the refresh's seam
-        if (!samples_.empty()) c -= Pm * std::round((c - samples_.front().c) / Pm);
+        // one continuous line within the window, across the refresh's seam:
+        // against the capture before (a frame apart they move by tens of us;
+        // against the window's first, a window steered at the whole reach -
+        // 5.6 ms at 100 fps, over half the refresh - put its later captures a
+        // refresh off, and the line through them was thrown out)
+        if (!samples_.empty()) c -= Pm * std::round((c - samples_.back().c) / Pm);
         samples_.push_back({ cap_us, c });
     }
 
@@ -176,8 +180,13 @@ private:
         double e = c + allow_ + guard_ - D;
         e -= Pm_ * std::round(e / Pm_);
         if (state_ == State::Acquiring && have_route_) {
-            // the way chosen, followed on: the error continuous from the last window's
-            e -= Pm_ * std::round((e - err_) / Pm_);
+            // the way chosen, followed on: continuous from the last window's
+            // error carried on by the drift since (by its own, the error
+            // moving over half a refresh between windows was taken a refresh
+            // the wrong way, every window: -213 ms at 100 fps)
+            const double drift = fit_ok_ ? fit_slope_ : (win_trim_ - centre_) * fps_;   // us a second
+            const double expect = err_ + drift * (double)(now_us - err_t_) / 1e6;
+            e -= Pm_ * std::round((e - expect) / Pm_);
         } else if (have_centre_) {
             // The quicker way round. Frames only get longer, so the pictures
             // come earlier at most as fast as the camera's own lead over the
@@ -192,6 +201,7 @@ private:
             have_route_ = state_ == State::Acquiring || state_ == State::Waiting;
         }
         err_ = e;
+        err_t_ = now_us;
 
         // Captures that do not hold still inside a window (a camera far off the
         // screen's rate sweeps through it): no median worth acting on.
@@ -217,8 +227,10 @@ private:
         if (have_centre_ && (state_ == State::Acquiring || state_ == State::Locked)) {
             const double Pc = 1e6 / fps_;
             const double lim = state_ == State::Locked ? 0.001 * Pc / 3 : acquire_limit(Pc);
-            // the error taken back over kTakeBackS
-            const double corr = std::max(-lim, std::min(lim, err_ / (kTakeBackS * fps_)));
+            // the error taken back over kTakeBackS - and never so fast that a
+            // window moves over 40% of the slot, whatever the reach
+            const double cap = 0.4 * k_ * Pm_ / (fps_ * (double)kWindowUs / 1e6);
+            const double corr = std::max(-std::min(lim, cap), std::min(std::min(lim, cap), err_ / (kTakeBackS * fps_)));
             trim_ = std::max(0.0, std::min(kHiUs, centre_ - corr));
         }
     }
@@ -285,7 +297,7 @@ private:
     std::deque<Lat> lats_;
     uint64_t last_cap_ = 0, stream_start_ = 0;
     bool open_ = false, have_centre_ = false, have_route_ = false;
-    uint64_t win_start_ = 0, last_window_ = 0, acq_since_ = 0, oor_since_ = 0;
+    uint64_t win_start_ = 0, last_window_ = 0, acq_since_ = 0, oor_since_ = 0, err_t_ = 0;
     double win_trim_ = 0, trim_ = 0, centre_ = 0, err_ = 0, allow_ = 0, neutral_ = 0;
     double fast_ = 0, guard_ = 0;                    // delivery's 1st percentile; the guard before the deadline
     double Pm_ = 16666.667, fps_ = 60;
