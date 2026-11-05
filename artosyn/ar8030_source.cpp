@@ -3838,6 +3838,13 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
                 hdr_seq_ = hseq;
                 hdr_seq_valid_ = true;
                 slice_hseq_ = hseq;
+                // kestrel-air marks each picture's last slice: the picture is
+                // whole when it is in, whatever its address. A GOP start with
+                // intra refresh is cut differently (2 slices, the second from
+                // CTB 120 at 1080p), so the learned last address never came
+                // and it waited for the next picture - a refresh late, then
+                // overtaken: 1 picture in 17 never shown (2026-11-05).
+                slice_last_ = air_hdr_tag_ && len >= 33 && (nal[32] & 0x40);
                 // A picture from the past, and everything up to the next
                 // header with it: nothing it says about the link is true.
                 if (new_pic) hdr_stale_ = stale_picture(cap32);
@@ -4073,6 +4080,8 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
             // Which picture the air unit says this slice is (-1: no header).
             const int hseq = slice_hseq_;
             slice_hseq_ = -1;
+            const bool marked_last = slice_last_;
+            slice_last_ = false;
             // first_slice_segment_in_pic_flag is the first bit after the HEVC
             // 2-byte NAL header; a 1 marks the start of a new picture.
             uint8_t first_slice = (codec == VideoCodec::H265)
@@ -4177,7 +4186,7 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
             au_open = true;
             if (addr > au_max_addr) au_max_addr = addr;
             au_slice_count++;
-            const bool last = last_slice_addr > 0 && addr == last_slice_addr;
+            const bool last = marked_last || (last_slice_addr > 0 && addr == last_slice_addr);
             // Streamed: the decoder starts on the first slice while the rest is
             // still on the air - the air unit sends the second half about half
             // a frame after the first - and finishes about a millisecond after
@@ -4218,7 +4227,7 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
             // picture's first slice turns up - a frame interval later (10 ms
             // at 100 fps), which is how long every complete picture used to
             // wait.
-            if (last_slice_addr > 0 && addr == last_slice_addr)
+            if (last)
                 flush_access_unit(recv_us);
         } else if (!is_param_set || ps_valid) {
             // VPS/SPS/PPS are cached and SEI dropped inside the decoder; the

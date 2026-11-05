@@ -609,6 +609,7 @@ class Ar8030Source {
         uint16_t hdr_seq_ = 0;           // the last header's counter, stale or not
         bool     hdr_seq_valid_ = false;
         int      slice_hseq_ = -1;       // counter of the header ahead of the next slice
+        bool slice_last_ = false;        // kestrel-air: the next slice is its picture's last (header byte 32, 0x40)
         int      au_hseq_ = -1;          // ...and of the picture being built
         unsigned long long stale_pics = 0, foreign_slices = 0;
         uint16_t sps_ids_ok_ = 0;        // SPS ids a valid SPS has been seen for
