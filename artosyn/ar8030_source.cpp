@@ -3865,7 +3865,6 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
                 // and it waited for the next picture - a refresh late, then
                 // overtaken: 1 picture in 17 never shown (2026-11-05).
                 slice_last_ = air_hdr_tag_ && len >= 33 && (nal[32] & 0x40);
-                dbg_hdr32_ = len >= 33 ? nal[32] : -2;
                 // A picture from the past, and everything up to the next
                 // header with it: nothing it says about the link is true.
                 if (new_pic) hdr_stale_ = stale_picture(cap32);
@@ -4131,14 +4130,6 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
                 return;
             }
             if (first_slice && au_open) {
-                // DEBUG (56/60): a picture closed by the next one's arrival.
-                {
-                    static unsigned n = 0;
-                    if (last_slice_addr > 0 && (++n <= 20 || n % 200 == 0))
-                        printf("ar8030: DEBUG picture %llu closed by the next one (%u so far): type %d, %d slices, "
-                               "last CTB %d (learned %d with %d): %s\n", (unsigned long long)au_pts, n, au_nal_type,
-                               au_slice_count, au_max_addr, last_slice_addr, last_slice_count, dbg_au_.c_str());
-                }
                 // Completed by the next picture's arrival: the fallback, and
                 // how the last slice's start address gets learned.
                 learn_last_slice(au_max_addr, au_slice_count);
@@ -4208,16 +4199,6 @@ void Ar8030Source::emit_nal(const uint8_t* nal, size_t len) {
                 au_stream_done = false;
                 frames_seen++;            // count real pictures, not slices
                 if (++late_window_pics >= 64) { late_window_pics = 0; late_slices = 0; }
-            }
-            if (first_slice) dbg_au_.clear();
-            if (dbg_au_.size() < 300) {
-                char b[40];
-                const uint64_t cap = au_times_ ? au_times_->frame_cap_us : 0;
-                snprintf(b, sizeof(b), " %d:%d:%zu:h%02x%s%s@%.1f", nal_type, addr, unit.size(), dbg_hdr32_ & 0xff,
-                         marked_last ? "L" : "", air_hdr_tag_ ? "" : "?",
-                         cap && recv_us > cap ? (recv_us - cap) / 1000.0 : -1.0);
-                dbg_hdr32_ = -1;
-                dbg_au_ += b;
             }
             au_slices.insert(au_slices.end(), unit.begin(), unit.end());
             note_slice(addr, first_slice, recv_us);
@@ -4585,22 +4566,6 @@ uint32_t Ar8030Source::predict_first_end(int hseq) const {
 // is told there is no more.
 void Ar8030Source::flush_access_unit(uint64_t recv_us) {
     if (!au_open) return;
-    // DEBUG: touch /tmp/kestrel-framedump - the next 40 pictures, each slice as
-    // NAL type:CTB:bytes:header byte 32 @ ms after capture it arrived.
-    {
-        static int left = 0;
-        static unsigned chk = 0;
-        if (!left && (chk++ % 30) == 0 && access("/tmp/kestrel-framedump", F_OK) == 0) {
-            unlink("/tmp/kestrel-framedump");
-            left = 40;
-        }
-        if (left > 0) {
-            left--;
-            const uint64_t cap = au_times_ ? au_times_->frame_cap_us : 0;
-            printf("ar8030: FRAME %lld: %d slices, %zu bytes, flushed @%.1f ms:%s\n", (long long)au_pts, au_slice_count,
-                   au_slices.size(), cap && recv_us > cap ? (recv_us - cap) / 1000.0 : -1.0, dbg_au_.c_str());
-        }
-    }
     if (au_times_) au_times_->complete.store(true);   // no more slices for it
     if (!au_slices.empty() && vdec) {
         const uint64_t au_recv = au_first_recv_us ? au_first_recv_us : recv_us;

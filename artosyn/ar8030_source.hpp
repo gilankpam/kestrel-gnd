@@ -610,7 +610,6 @@ class Ar8030Source {
         bool     hdr_seq_valid_ = false;
         int      slice_hseq_ = -1;       // counter of the header ahead of the next slice
         bool slice_last_ = false;        // kestrel-air: the next slice is its picture's last (header byte 32, 0x40)
-        int dbg_hdr32_ = -1;              // DEBUG (56/60): header byte 32 ahead of the next slice
         int      au_hseq_ = -1;          // ...and of the picture being built
         unsigned long long stale_pics = 0, foreign_slices = 0;
         uint16_t sps_ids_ok_ = 0;        // SPS ids a valid SPS has been seen for
@@ -659,7 +658,6 @@ class Ar8030Source {
         std::vector<uint8_t> build_config_frame(const uint8_t *tmpl, size_t len);
         void apply_pending_settings();
         void send_frame_trim();           // SPIKE: camera steering (g_camera_trim_ns)
-        std::string dbg_au_;              // DEBUG (56/60): this picture's slices, type:CTB:bytes
         uint64_t trim_sent_ms_ = 0;
         int32_t trim_sent_ns_ = INT32_MIN;
         void apply_pending_rf();
